@@ -1,0 +1,133 @@
+{% load static %}<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobRadar — вакансії під ваш профіль</title>
+<link rel="stylesheet" href="{% static 'radar/style.css' %}">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="radar"></span>JobRadar</div>
+  <div class="top-actions">
+    <a href="{% url 'admin:radar_source_changelist' %}" class="btn ghost">Джерела</a>
+    <form method="post" action="{% url 'start_scrape' %}">{% csrf_token %}
+      <button class="btn" {% if scraping %}disabled{% endif %}>{% if scraping %}Збираю…{% else %}↻ Зібрати вакансії{% endif %}</button>
+    </form>
+  </div>
+</header>
+
+<main>
+  {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+
+  <section class="kpis">
+    <div class="kpi"><span>Актуальні</span><b>{{ stats.total }}</b></div>
+    <div class="kpi"><span>Нові за добу</span><b>{{ stats.new_24h }}</b></div>
+    <div class="kpi accent"><span>Сильний збіг (70+)</span><b>{{ stats.strong }}</b></div>
+    <div class="kpi"><span>Середня оцінка</span><b>{{ stats.avg }}</b></div>
+    <div class="kpi"><span>Відгукнувся</span><b>{{ stats.applied }}</b></div>
+    <div class="kpi warn"><span>Відсіяно як скам / 18+</span><b>{{ stats.flagged }}</b></div>
+  </section>
+
+  <section class="insights">
+    <div class="panel">
+      <h3>Джерела</h3>
+      {% for s, width, avg in by_source %}
+        <div class="bar-row">
+          <span class="bar-label" title="{{ s.target }}">{{ s.name }}</span>
+          <span class="bar"><i style="width: {{ width }}%"></i></span>
+          <span class="bar-val">{{ s.n }} · ⌀{{ avg }}{% if s.last_error %} <em title="{{ s.last_error }}">⚠</em>{% endif %}</span>
+        </div>
+      {% empty %}<p class="muted">Джерел немає. Запустіть <code>python manage.py seed_sources</code>.</p>{% endfor %}
+    </div>
+    <div class="panel">
+      <h3>Найчастіші мітки у вакансіях</h3>
+      <div class="chips">{% for tag, n in top_tags %}<span class="chip">{{ tag }} <b>{{ n }}</b></span>{% empty %}<span class="muted">Даних поки немає</span>{% endfor %}</div>
+    </div>
+  </section>
+
+  <form class="filters" method="get">
+    <input type="search" name="q" value="{{ f.q }}" placeholder="Пошук: python, монтаж, бот…">
+    <select name="source">
+      <option value="">Усі джерела</option>
+      {% for s in sources %}<option value="{{ s.id }}" {% if f.source == s.id|stringformat:"s" %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+    </select>
+    <select name="status">
+      <option value="active" {% if f.status == "active" %}selected{% endif %}>Без прихованих</option>
+      {% for value, label in statuses %}<option value="{{ value }}" {% if f.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      <option value="all" {% if f.status == "all" %}selected{% endif %}>Усі</option>
+    </select>
+    <label class="range">Від <output>{{ f.min_score }}</output>
+      <input type="range" name="min_score" min="0" max="90" step="10" value="{{ f.min_score }}" oninput="this.previousElementSibling.value=this.value">
+    </label>
+    <select name="sort">
+      <option value="score" {% if f.sort == "score" %}selected{% endif %}>За оцінкою</option>
+      <option value="date" {% if f.sort == "date" %}selected{% endif %}>Найновіші</option>
+      <option value="salary" {% if f.sort == "salary" %}selected{% endif %}>За зарплатою</option>
+    </select>
+    <label class="check"><input type="checkbox" name="hide_flags" value="1" {% if f.hide_flags == "1" %}checked{% endif %} onchange="if(!this.checked){this.form.insertAdjacentHTML('beforeend','<input type=hidden name=hide_flags value=0>')}"> Ховати скам</label>
+    <button class="btn">Застосувати</button>
+  </form>
+
+  <p class="muted count">Знайдено: {{ page.paginator.count }}</p>
+
+  <section class="list">
+    {% for v in page %}
+    <article class="card" data-id="{{ v.id }}" data-status="{{ v.status }}">
+      <div class="score s{% if v.score >= 70 %}hi{% elif v.score >= 50 %}mid{% else %}lo{% endif %}">{{ v.score }}</div>
+      <div class="body">
+        <h2><a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a></h2>
+        <div class="meta">
+          {% if v.company %}<span>🏢 {{ v.company }}</span>{% endif %}
+          {% if v.salary_text %}<span class="salary">💰 {{ v.salary_text }}</span>{% endif %}
+          {% if v.location %}<span>📍 {{ v.location }}</span>{% endif %}
+          {% if v.experience %}<span>⚡ {{ v.experience }}</span>{% endif %}
+          {% if v.english %}<span>🗣 {{ v.english }}</span>{% endif %}
+          {% if v.applications is not None %}<span>👥 {{ v.applications }} відгуків</span>{% endif %}
+        </div>
+        <div class="chips">
+          {% for t in v.tags %}<span class="chip {% if t == 'Дзвінки' or t == 'Досвід 2+ роки' or t == 'Senior / Lead' or t == 'Жорсткий 5/2 вдень' %}bad{% endif %}">{{ t }}</span>{% endfor %}
+          {% for t in v.red_flags %}<span class="chip flag">⛔ {{ t }}</span>{% endfor %}
+        </div>
+        <p class="snippet">{{ v.text|truncatechars:260 }}</p>
+        <div class="foot">
+          <span class="muted">{{ v.source.name }}{% if v.published_at %} · {{ v.published_at|date:"d.m H:i" }}{% endif %}</span>
+          <span class="actions">
+            <button data-set="favorite" class="{% if v.status == 'favorite' %}on{% endif %}">⭐ Обране</button>
+            <button data-set="applied" class="{% if v.status == 'applied' %}on{% endif %}">✅ Відгукнувся</button>
+            <button data-set="hidden">🙈 Сховати</button>
+          </span>
+        </div>
+      </div>
+    </article>
+    {% empty %}
+    <div class="empty">Вакансій немає. Натисніть «Зібрати вакансії» або змініть фільтри.</div>
+    {% endfor %}
+  </section>
+
+  {% if page.has_other_pages %}
+  <nav class="pager">
+    {% if page.has_previous %}<a href="?{{ query_string }}&page={{ page.previous_page_number }}">← Назад</a>{% endif %}
+    <span>{{ page.number }} / {{ page.paginator.num_pages }}</span>
+    {% if page.has_next %}<a href="?{{ query_string }}&page={{ page.next_page_number }}">Далі →</a>{% endif %}
+  </nav>
+  {% endif %}
+</main>
+{% csrf_token %}
+<script>
+document.querySelectorAll(".card .actions button").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const card = btn.closest(".card");
+    const target = btn.classList.contains("on") ? "new" : btn.dataset.set;
+    const body = new FormData();
+    body.append("status", target);
+    body.append("csrfmiddlewaretoken", document.querySelector("[name=csrfmiddlewaretoken]").value);
+    const res = await fetch(`/vacancy/${card.dataset.id}/status/`, { method: "POST", body });
+    if (!res.ok) return;
+    if (target === "hidden") { card.classList.add("gone"); setTimeout(() => card.remove(), 300); return; }
+    card.querySelectorAll(".actions button").forEach((b) => b.classList.toggle("on", b.dataset.set === target));
+  });
+});
+</script>
+</body>
+</html>
